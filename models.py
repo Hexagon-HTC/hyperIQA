@@ -1,17 +1,9 @@
-import torch as torch
-import torch.nn as nn
+import math
+
+import torch
+from torch import nn
 from torch.nn import functional as F
 from torch.nn import init
-import math
-import torch.utils.model_zoo as model_zoo
-
-model_urls = {
-    'resnet18': 'https://download.pytorch.org/models/resnet18-5c106cde.pth',
-    'resnet34': 'https://download.pytorch.org/models/resnet34-333f7ec4.pth',
-    'resnet50': 'https://download.pytorch.org/models/resnet50-19c8e357.pth',
-    'resnet101': 'https://download.pytorch.org/models/resnet101-5d3b4d8f.pth',
-    'resnet152': 'https://download.pytorch.org/models/resnet152-b121ed2d.pth',
-}
 
 
 class HyperNet(nn.Module):
@@ -26,13 +18,22 @@ class HyperNet(nn.Module):
         feature_size: input feature map width/height for hyper network.
 
     Note:
-        For size match, input args must satisfy: 'target_fc(i)_size * target_fc(i+1)_size' is divisible by 'feature_size ^ 2'.
+        For size match, input args must satisfy:
+        'target_fc(i)_size * target_fc(i+1)_size' is divisible by 'feature_size ^ 2'.
 
     """
-    def __init__(self, lda_out_channels, hyper_in_channels, target_in_size, target_fc1_size, target_fc2_size, target_fc3_size, target_fc4_size, feature_size):
-        super(HyperNet, self).__init__()
+    def __init__(self,
+                 lda_out_channels,
+                 hyper_in_channels,
+                 target_in_size,
+                 target_fc1_size,
+                 target_fc2_size,
+                 target_fc3_size,
+                 target_fc4_size,
+                 feature_size):
+        super().__init__()
 
-        self.hyperInChn = hyper_in_channels
+        self.hyper_in_chn = hyper_in_channels
         self.target_in_size = target_in_size
         self.f1 = target_fc1_size
         self.f2 = target_fc2_size
@@ -44,31 +45,32 @@ class HyperNet(nn.Module):
 
         self.pool = nn.AdaptiveAvgPool2d((1, 1))
 
-        # Conv layers for resnet output features
         self.conv1 = nn.Sequential(
             nn.Conv2d(2048, 1024, 1, padding=(0, 0)),
             nn.ReLU(inplace=True),
             nn.Conv2d(1024, 512, 1, padding=(0, 0)),
             nn.ReLU(inplace=True),
-            nn.Conv2d(512, self.hyperInChn, 1, padding=(0, 0)),
+            nn.Conv2d(512, self.hyper_in_chn, 1, padding=(0, 0)),
             nn.ReLU(inplace=True)
         )
 
-        # Hyper network part, conv for generating target fc weights, fc for generating target fc biases
-        self.fc1w_conv = nn.Conv2d(self.hyperInChn, int(self.target_in_size * self.f1 / feature_size ** 2), 3,  padding=(1, 1))
-        self.fc1b_fc = nn.Linear(self.hyperInChn, self.f1)
+        self.fc1w_conv = nn.Conv2d(self.hyper_in_chn,
+                                   int(self.target_in_size * self.f1 / feature_size ** 2),
+                                   3,
+                                   padding=(1, 1))
+        self.fc1b_fc = nn.Linear(self.hyper_in_chn, self.f1)
 
-        self.fc2w_conv = nn.Conv2d(self.hyperInChn, int(self.f1 * self.f2 / feature_size ** 2), 3, padding=(1, 1))
-        self.fc2b_fc = nn.Linear(self.hyperInChn, self.f2)
+        self.fc2w_conv = nn.Conv2d(self.hyper_in_chn, int(self.f1 * self.f2 / feature_size ** 2), 3, padding=(1, 1))
+        self.fc2b_fc = nn.Linear(self.hyper_in_chn, self.f2)
 
-        self.fc3w_conv = nn.Conv2d(self.hyperInChn, int(self.f2 * self.f3 / feature_size ** 2), 3, padding=(1, 1))
-        self.fc3b_fc = nn.Linear(self.hyperInChn, self.f3)
+        self.fc3w_conv = nn.Conv2d(self.hyper_in_chn, int(self.f2 * self.f3 / feature_size ** 2), 3, padding=(1, 1))
+        self.fc3b_fc = nn.Linear(self.hyper_in_chn, self.f3)
 
-        self.fc4w_conv = nn.Conv2d(self.hyperInChn, int(self.f3 * self.f4 / feature_size ** 2), 3, padding=(1, 1))
-        self.fc4b_fc = nn.Linear(self.hyperInChn, self.f4)
+        self.fc4w_conv = nn.Conv2d(self.hyper_in_chn, int(self.f3 * self.f4 / feature_size ** 2), 3, padding=(1, 1))
+        self.fc4b_fc = nn.Linear(self.hyper_in_chn, self.f4)
 
-        self.fc5w_fc = nn.Linear(self.hyperInChn, self.f4)
-        self.fc5b_fc = nn.Linear(self.hyperInChn, 1)
+        self.fc5w_fc = nn.Linear(self.hyper_in_chn, self.f4)
+        self.fc5b_fc = nn.Linear(self.hyper_in_chn, 1)
 
         # initialize
         for i, m_name in enumerate(self._modules):
@@ -84,7 +86,7 @@ class HyperNet(nn.Module):
         target_in_vec = res_out['target_in_vec'].view(-1, self.target_in_size, 1, 1)
 
         # input features for hyper net
-        hyper_in_feat = self.conv1(res_out['hyper_in_feat']).view(-1, self.hyperInChn, feature_size, feature_size)
+        hyper_in_feat = self.conv1(res_out['hyper_in_feat']).view(-1, self.hyper_in_chn, feature_size, feature_size)
 
         # generating target net weights & biases
         target_fc1w = self.fc1w_conv(hyper_in_feat).view(-1, self.f1, self.target_in_size, 1, 1)
@@ -102,20 +104,17 @@ class HyperNet(nn.Module):
         target_fc5w = self.fc5w_fc(self.pool(hyper_in_feat).squeeze()).view(-1, 1, self.f4, 1, 1)
         target_fc5b = self.fc5b_fc(self.pool(hyper_in_feat).squeeze()).view(-1, 1)
 
-        out = {}
-        out['target_in_vec'] = target_in_vec
-        out['target_fc1w'] = target_fc1w
-        out['target_fc1b'] = target_fc1b
-        out['target_fc2w'] = target_fc2w
-        out['target_fc2b'] = target_fc2b
-        out['target_fc3w'] = target_fc3w
-        out['target_fc3b'] = target_fc3b
-        out['target_fc4w'] = target_fc4w
-        out['target_fc4b'] = target_fc4b
-        out['target_fc5w'] = target_fc5w
-        out['target_fc5b'] = target_fc5b
-
-        return out
+        return {'target_in_vec': target_in_vec,
+                'target_fc1w': target_fc1w,
+                'target_fc1b': target_fc1b,
+                'target_fc2w': target_fc2w,
+                'target_fc2b': target_fc2b,
+                'target_fc3w': target_fc3w,
+                'target_fc3b': target_fc3b,
+                'target_fc4w': target_fc4w,
+                'target_fc4b': target_fc4b,
+                'target_fc5w': target_fc5w,
+                'target_fc5b': target_fc5b}
 
 
 class TargetNet(nn.Module):
@@ -123,7 +122,8 @@ class TargetNet(nn.Module):
     Target network for quality prediction.
     """
     def __init__(self, paras):
-        super(TargetNet, self).__init__()
+        super().__init__()
+
         self.l1 = nn.Sequential(
             TargetFC(paras['target_fc1w'], paras['target_fc1b']),
             nn.Sigmoid(),
@@ -149,8 +149,7 @@ class TargetNet(nn.Module):
         # q = F.dropout(q)
         q = self.l2(q)
         q = self.l3(q)
-        q = self.l4(q).squeeze()
-        return q
+        return self.l4(q).squeeze()
 
 
 class TargetFC(nn.Module):
@@ -159,17 +158,21 @@ class TargetFC(nn.Module):
 
     Note:
         Weights & biases are different for different images in a batch,
-        thus here we use group convolution for calculating images in a batch with individual weights & biases.
+        thus here we use group convolution for calculating images
+        in a batch with individual weights & biases.
     """
     def __init__(self, weight, bias):
-        super(TargetFC, self).__init__()
+        super().__init__()
         self.weight = weight
         self.bias = bias
 
     def forward(self, input_):
 
         input_re = input_.view(-1, input_.shape[0] * input_.shape[1], input_.shape[2], input_.shape[3])
-        weight_re = self.weight.view(self.weight.shape[0] * self.weight.shape[1], self.weight.shape[2], self.weight.shape[3], self.weight.shape[4])
+        weight_re = self.weight.view(self.weight.shape[0] * self.weight.shape[1],
+                                     self.weight.shape[2],
+                                     self.weight.shape[3],
+                                     self.weight.shape[4])
         bias_re = self.bias.view(self.bias.shape[0] * self.bias.shape[1])
         out = F.conv2d(input=input_re, weight=weight_re, bias=bias_re, groups=self.weight.shape[0])
 
@@ -180,7 +183,7 @@ class Bottleneck(nn.Module):
     expansion = 4
 
     def __init__(self, inplanes, planes, stride=1, downsample=None):
-        super(Bottleneck, self).__init__()
+        super().__init__()
         self.conv1 = nn.Conv2d(inplanes, planes, kernel_size=1, bias=False)
         self.bn1 = nn.BatchNorm2d(planes)
         self.conv2 = nn.Conv2d(planes, planes, kernel_size=3, stride=stride,
@@ -210,15 +213,14 @@ class Bottleneck(nn.Module):
             residual = self.downsample(x)
 
         out += residual
-        out = self.relu(out)
 
-        return out
+        return self.relu(out)
 
 
 class ResNetBackbone(nn.Module):
 
-    def __init__(self, lda_out_channels, in_chn, block, layers, num_classes=1000):
-        super(ResNetBackbone, self).__init__()
+    def __init__(self, lda_out_channels, in_chn, block, layers):
+        super().__init__()
         self.inplanes = 64
         self.conv1 = nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3, bias=False)
         self.bn1 = nn.BatchNorm2d(64)
@@ -268,23 +270,6 @@ class ResNetBackbone(nn.Module):
         nn.init.kaiming_normal_(self.lda3_fc.weight.data)
         nn.init.kaiming_normal_(self.lda4_fc.weight.data)
 
-    def _make_layer(self, block, planes, blocks, stride=1):
-        downsample = None
-        if stride != 1 or self.inplanes != planes * block.expansion:
-            downsample = nn.Sequential(
-                nn.Conv2d(self.inplanes, planes * block.expansion,
-                          kernel_size=1, stride=stride, bias=False),
-                nn.BatchNorm2d(planes * block.expansion),
-            )
-
-        layers = []
-        layers.append(block(self.inplanes, planes, stride, downsample))
-        self.inplanes = planes * block.expansion
-        for i in range(1, blocks):
-            layers.append(block(self.inplanes, planes))
-
-        return nn.Sequential(*layers)
-
     def forward(self, x):
         x = self.conv1(x)
         x = self.bn1(x)
@@ -292,7 +277,6 @@ class ResNetBackbone(nn.Module):
         x = self.maxpool(x)
         x = self.layer1(x)
 
-        # the same effect as lda operation in the paper, but save much more memory
         lda_1 = self.lda1_fc(self.lda1_pool(x).view(x.size(0), -1))
         x = self.layer2(x)
         lda_2 = self.lda2_fc(self.lda2_pool(x).view(x.size(0), -1))
@@ -303,11 +287,24 @@ class ResNetBackbone(nn.Module):
 
         vec = torch.cat((lda_1, lda_2, lda_3, lda_4), 1)
 
-        out = {}
-        out['hyper_in_feat'] = x
-        out['target_in_vec'] = vec
+        return {'hyper_in_feat': x,
+                'target_in_vec': vec}
 
-        return out
+    def _make_layer(self, block, planes, blocks, stride=1):
+        downsample = None
+        if stride != 1 or self.inplanes != planes * block.expansion:
+            downsample = nn.Sequential(
+                nn.Conv2d(self.inplanes, planes * block.expansion,
+                          kernel_size=1, stride=stride, bias=False),
+                nn.BatchNorm2d(planes * block.expansion),
+            )
+
+        layers = [block(self.inplanes, planes, stride, downsample)]
+        self.inplanes = planes * block.expansion
+        for _ in range(1, blocks):
+            layers.append(block(self.inplanes, planes))
+
+        return nn.Sequential(*layers)
 
 
 def resnet50_backbone(lda_out_channels, in_chn, pretrained=False, **kwargs):
@@ -318,9 +315,9 @@ def resnet50_backbone(lda_out_channels, in_chn, pretrained=False, **kwargs):
     """
     model = ResNetBackbone(lda_out_channels, in_chn, Bottleneck, [3, 4, 6, 3], **kwargs)
     if pretrained:
-        save_model = model_zoo.load_url(model_urls['resnet50'])
+        save_model = torch.load('test_data/cp_app/model/hyperIQA/resnet50-19c8e357.pth', weights_only=True)
         model_dict = model.state_dict()
-        state_dict = {k: v for k, v in save_model.items() if k in model_dict.keys()}
+        state_dict = {k: v for k, v in save_model.items() if k in model_dict}
         model_dict.update(state_dict)
         model.load_state_dict(model_dict)
     else:
@@ -330,11 +327,8 @@ def resnet50_backbone(lda_out_channels, in_chn, pretrained=False, **kwargs):
 
 def weights_init_xavier(m):
     classname = m.__class__.__name__
-    # print(classname)
-    # if isinstance(m, nn.Conv2d):
-    if classname.find('Conv') != -1:
-        init.kaiming_normal_(m.weight.data)
-    elif classname.find('Linear') != -1:
+
+    if (classname.find('Conv') != -1 or classname.find('Linear') != -1):
         init.kaiming_normal_(m.weight.data)
     elif classname.find('BatchNorm2d') != -1:
         init.uniform_(m.weight.data, 1.0, 0.02)
